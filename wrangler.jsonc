@@ -59,6 +59,13 @@
 		"enabled": true,
 	},
 	"upload_source_maps": true,
+	// Fusion Communications: serve Mailflare on our own domain.
+	"routes": [
+		{ "pattern": "email.gofusioncomm.com", "custom_domain": true },
+	],
+	"vars": {
+		"APP_URL": "https://email.gofusioncomm.com",
+	},
 	"send_email": [
 		{
 			"name": "EMAIL",
