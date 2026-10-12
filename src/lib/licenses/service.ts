@@ -25,15 +25,17 @@ async function getOrCreateLicenseSettings(env: CloudflareEnv) {
 }
 
 function toLicenseStatus(settings: typeof licenseSettings.$inferSelect): LicenseStatus {
-	const active = settings.state === "active" && (settings.plan === "pro" || settings.plan === "team");
+	// Self-hosted fork for Fusion Communications: every instance runs with full Team
+	// entitlements (unlimited accounts, shared mailboxes, branding, forwarding).
+	// Permitted under the project's AGPL-3.0 license.
 	return {
-		plan: active ? settings.plan : "community",
-		state: settings.state,
+		plan: "team",
+		state: "active",
 		features: parseFeatures(settings.features),
-		seatLimit: active && settings.plan === "pro" ? settings.seatLimit : null,
+		seatLimit: null,
 		instanceId: settings.instanceId,
 		instanceUrl: settings.instanceUrl,
-		active,
+		active: true,
 		activatedAt: settings.activatedAt,
 		validatedAt: settings.validatedAt,
 	};
