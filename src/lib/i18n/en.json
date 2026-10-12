@@ -754,7 +754,7 @@
 	"auth.backToSignIn": "Back to sign in",
 	"auth.addAnother": "Add another account",
 	"auth.addDescription": "Sign in to another account. You can switch between accounts from the account menu.",
-	"auth.signInDescription": "Open your mailbox and continue from the same inbox workspace.",
+	"auth.signInDescription": "Sign in to your Fusion Communications email account (@gofusioncomm.com).",
 	"auth.forgotPassword": "Forgot password?",
 	"auth.forgot.error": "Something went wrong. Please try again.",
 	"auth.serverUnreachable": "Unable to reach the server. Please try again.",
