@@ -1,10 +1,21 @@
 name: Dashboard Update
 
+# Fusion Communications fork of Mailflare.
+# The "Update Mailflare" button in the admin dashboard runs this workflow.
+# Unlike the original (which REPLACED this repository with upstream and
+# removed our changes), this version MERGES upstream into our branch, so our
+# customizations (the Team unlock) are kept. If the merge conflicts with our
+# changes, nothing is pushed or deployed and the live site keeps running.
+
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: mailflare-update
+  cancel-in-progress: false
 
 jobs:
   update:
@@ -13,14 +24,17 @@ jobs:
       UPDATE_SOURCE_REPOSITORY: ${{ vars.UPDATE_SOURCE_REPOSITORY || 'hieunc229/mailflare' }}
 
     steps:
-      - name: Check update token
+      - name: Check required secrets
         env:
           UPDATE_TOKEN: ${{ secrets.MAILFLARE_UPDATE_TOKEN }}
+          CF_API: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          if [ -z "${UPDATE_TOKEN}" ]; then
-            echo "::error::Add MAILFLARE_UPDATE_TOKEN as a repository Actions secret."
-            exit 1
-          fi
+          missing=0
+          [ -z "${UPDATE_TOKEN}" ] && echo "::error::Add MAILFLARE_UPDATE_TOKEN as a repository Actions secret." && missing=1
+          [ -z "${CF_API}" ] && echo "::error::Add CLOUDFLARE_API_TOKEN as a repository Actions secret." && missing=1
+          [ -z "${CF_ACCOUNT}" ] && echo "::error::Add CLOUDFLARE_ACCOUNT_ID as a repository Actions secret." && missing=1
+          exit $missing
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -28,42 +42,73 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.MAILFLARE_UPDATE_TOKEN }}
 
-      - name: Replace repository with upstream source
+      - name: Merge upstream into our branch (keeps our changes)
         run: |
           set -euo pipefail
           git config user.name "mailflare-update"
           git config user.email "mailflare-update@users.noreply.github.com"
 
           upstream_url="https://github.com/${UPDATE_SOURCE_REPOSITORY}.git"
-          if git remote get-url upstream >/dev/null 2>&1; then
-            git remote set-url upstream "${upstream_url}"
-          else
-            git remote add upstream "${upstream_url}"
-          fi
+          git remote add upstream "${upstream_url}" 2>/dev/null || git remote set-url upstream "${upstream_url}"
           git fetch --no-tags upstream
 
           upstream_branch="$(git remote show upstream | sed -n 's/.*HEAD branch: //p')"
-          if [ -z "${upstream_branch}" ]; then
-            echo "::error::Could not resolve the default branch of ${UPDATE_SOURCE_REPOSITORY}."
+          upstream_ref="upstream/${upstream_branch}"
+
+          if git merge-base --is-ancestor "${upstream_ref}" HEAD; then
+            echo "Already up to date with ${upstream_ref}."
+            echo "UP_TO_DATE=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          before="$(git rev-parse HEAD)"
+          git merge --no-ff --no-commit "${upstream_ref}" || true
+
+          # Always keep OUR version of this workflow, never upstream's.
+          git checkout "${before}" -- .github/workflows/deploy-update.yml
+
+          conflicts="$(git diff --name-only --diff-filter=U)"
+          if [ -n "${conflicts}" ]; then
+            echo "::error::Upstream changes conflict with our customizations in:"
+            echo "${conflicts}"
+            echo "::error::Nothing was changed. Ask for a manual update."
+            git merge --abort
             exit 1
           fi
-          upstream_ref="upstream/${upstream_branch}"
-          echo "Replacing ${GITHUB_REF_NAME} with ${upstream_ref}."
 
-          # Keep the installation repository's commit history while replacing
-          # its complete tracked tree with the current upstream tree.
-          git read-tree --reset -u "${upstream_ref}"
-          if git diff --cached --quiet; then
-            echo "Repository is already up to date."
-            exit 0
-          fi
-          git commit -m "Update Mailflare from ${UPDATE_SOURCE_REPOSITORY}@${upstream_branch}"
+          git commit -m "Merge ${UPDATE_SOURCE_REPOSITORY}@${upstream_branch} into ${GITHUB_REF_NAME}"
 
-      - name: Push update
+      - name: Verify our Team unlock is still in place
+        if: env.UP_TO_DATE != '1'
         run: |
-          set -euo pipefail
-          if [ -z "$(git log "origin/${GITHUB_REF_NAME}..HEAD" --oneline)" ]; then
-            echo "Repository is already up to date."
-            exit 0
+          if ! grep -q 'plan: "team"' src/lib/licenses/service.ts; then
+            echo "::error::After merging, the Team unlock in src/lib/licenses/service.ts is gone (upstream changed that code)."
+            echo "::error::Nothing was pushed or deployed. Ask for a manual update."
+            exit 1
           fi
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Set up Node
+        if: env.UP_TO_DATE != '1'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install and build
+        if: env.UP_TO_DATE != '1'
+        env:
+          NODE_ENV: development
+        run: |
+          npm ci --include=dev --no-audit --no-fund
+          npm run build
+
+      - name: Deploy to Cloudflare
+        if: env.UP_TO_DATE != '1'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy
+
+      - name: Save the merged version to GitHub
+        if: env.UP_TO_DATE != '1'
+        run: git push origin "HEAD:${GITHUB_REF_NAME}"
